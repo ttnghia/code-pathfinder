@@ -288,6 +288,8 @@ Examples:
 			}
 		}
 
+		buildClikeCallGraphs(cg, codeGraph, projectPath, logger)
+
 		// Step 4: Load Python SDK rules
 		logger.StartProgress("Loading rules", -1)
 		rules, err := loader.LoadRules(logger)
@@ -476,6 +478,72 @@ func countTotalCallSites(cg *core.CallGraph) int {
 		total += len(sites)
 	}
 	return total
+}
+
+// buildClikeCallGraphs runs the C and C++ call-graph builders against
+// codeGraph (when those languages are present) and merges the results
+// into cg. Each builder is independent: a failure or skip on one
+// language never blocks the other.
+//
+// Unlike Go (which checks `go.mod` up front), C/C++ has no single
+// manifest file. We instead look at the already-parsed CodeGraph for
+// nodes tagged with the right `Language` so the builder skips the
+// work entirely on Python-only or Go-only projects.
+func buildClikeCallGraphs(cg *core.CallGraph, codeGraph *graph.CodeGraph, projectPath string, logger *output.Logger) {
+	if hasLanguageNodes(codeGraph, "c") {
+		buildCCallGraphAndMerge(cg, codeGraph, projectPath, logger)
+	}
+	if hasLanguageNodes(codeGraph, "cpp") {
+		buildCppCallGraphAndMerge(cg, codeGraph, projectPath, logger)
+	}
+}
+
+// buildCCallGraphAndMerge constructs the C call graph and merges it
+// into cg. Build failures emit a warning and leave cg untouched.
+func buildCCallGraphAndMerge(cg *core.CallGraph, codeGraph *graph.CodeGraph, projectPath string, logger *output.Logger) {
+	logger.Debug("Detected C source files, building C call graph...")
+	cRegistry := registry.BuildCModuleRegistry(projectPath, codeGraph)
+	cTypeEngine := resolution.NewCTypeInferenceEngine(cRegistry)
+	cCG, err := builder.BuildCCallGraph(codeGraph, cRegistry, cTypeEngine)
+	if err != nil {
+		logger.Warning("Failed to build C call graph: %v", err)
+		return
+	}
+	builder.MergeCallGraphs(cg, cCG)
+	logger.Statistic("C call graph merged: %d functions, %d call sites",
+		len(cCG.Functions), countTotalCallSites(cCG))
+}
+
+// buildCppCallGraphAndMerge constructs the C++ call graph and merges
+// it into cg. Build failures emit a warning and leave cg untouched.
+func buildCppCallGraphAndMerge(cg *core.CallGraph, codeGraph *graph.CodeGraph, projectPath string, logger *output.Logger) {
+	logger.Debug("Detected C++ source files, building C++ call graph...")
+	cppRegistry := registry.BuildCppModuleRegistry(projectPath, codeGraph)
+	cppTypeEngine := resolution.NewCppTypeInferenceEngine(cppRegistry)
+	cppCG, err := builder.BuildCppCallGraph(codeGraph, cppRegistry, cppTypeEngine)
+	if err != nil {
+		logger.Warning("Failed to build C++ call graph: %v", err)
+		return
+	}
+	builder.MergeCallGraphs(cg, cppCG)
+	logger.Statistic("C++ call graph merged: %d functions, %d call sites",
+		len(cppCG.Functions), countTotalCallSites(cppCG))
+}
+
+// hasLanguageNodes reports whether codeGraph contains at least one
+// node tagged with the given Language. Used to gate per-language call
+// graph builders so we skip the work when no source files of that
+// language were parsed.
+func hasLanguageNodes(codeGraph *graph.CodeGraph, language string) bool {
+	if codeGraph == nil {
+		return false
+	}
+	for _, node := range codeGraph.Nodes {
+		if node != nil && node.Language == language {
+			return true
+		}
+	}
+	return false
 }
 
 // extractContainerFiles extracts unique Docker and docker-compose file paths from CodeGraph.
