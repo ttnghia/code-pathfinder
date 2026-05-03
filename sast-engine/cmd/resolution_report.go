@@ -47,7 +47,7 @@ Use --csv to export unresolved calls with file, line, target, and reason.`,
 
 		fmt.Println("Building call graph...")
 		logger := output.NewLogger(output.VerbosityDefault)
-		cg, registry, _, err := callgraph.InitializeCallGraph(codeGraph, projectInput, logger)
+		cg, modReg, _, err := callgraph.InitializeCallGraph(codeGraph, projectInput, logger)
 		if err != nil {
 			fmt.Printf("Error building call graph: %v\n", err)
 			return
@@ -87,6 +87,10 @@ Use --csv to export unresolved calls with file, line, target, and reason.`,
 				}
 			}
 		}
+
+		// Reuse scan.go's helper so both commands stay aligned. It gates
+		// each builder on hasLanguageNodes and merges into cg in place.
+		buildClikeCallGraphs(cg, codeGraph, projectInput, logger)
 
 		fmt.Printf("\nResolution Report for %s\n", projectInput)
 		fmt.Println("===============================================")
@@ -128,7 +132,7 @@ Use --csv to export unresolved calls with file, line, target, and reason.`,
 		printTopUnresolvedPatterns(stats, 20)
 		fmt.Println()
 
-		fmt.Printf("Module registry: %d modules\n", len(registry.Modules))
+		fmt.Printf("Module registry: %d modules\n", len(modReg.Modules))
 
 		// Export CSV if requested
 		if csvOutput != "" {
